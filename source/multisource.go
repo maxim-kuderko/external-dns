@@ -39,7 +39,7 @@ func (ms *multiSource) Endpoints(ctx context.Context) ([]*endpoint.Endpoint, err
 	for _, s := range ms.children {
 		sem <- struct{}{}
 		wg.Add(1)
-		go func() {
+		go func(s Source) {
 			defer wg.Done()
 			defer func() {
 				<-sem
@@ -62,7 +62,7 @@ func (ms *multiSource) Endpoints(ctx context.Context) ([]*endpoint.Endpoint, err
 			} else {
 				result = append(result, endpoints...)
 			}
-		}()
+		}(s)
 
 	}
 	wg.Wait()
