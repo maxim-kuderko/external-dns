@@ -18,6 +18,7 @@ package source
 
 import (
 	"context"
+	"sync"
 
 	"sigs.k8s.io/external-dns/endpoint"
 )
@@ -31,26 +32,41 @@ type multiSource struct {
 // Endpoints collects endpoints of all nested Sources and returns them in a single slice.
 func (ms *multiSource) Endpoints(ctx context.Context) ([]*endpoint.Endpoint, error) {
 	result := []*endpoint.Endpoint{}
-
+	lock := sync.Mutex{}
+	wg := sync.WaitGroup{}
+	sem := make(chan struct{}, 8)
+	var err error
 	for _, s := range ms.children {
-		endpoints, err := s.Endpoints(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if len(ms.defaultTargets) > 0 {
-			for i := range endpoints {
-				eps := endpointsForHostname(endpoints[i].DNSName, ms.defaultTargets, endpoints[i].RecordTTL, endpoints[i].ProviderSpecific, endpoints[i].SetIdentifier, "")
-				for _, ep := range eps {
-					ep.Labels = endpoints[i].Labels
-				}
-				result = append(result, eps...)
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				<-sem
+			}()
+			endpoints, err2 := s.Endpoints(ctx)
+			lock.Lock()
+			defer lock.Unlock()
+			if err2 != nil {
+				err = err2
+				return
 			}
-		} else {
-			result = append(result, endpoints...)
-		}
-	}
+			if len(ms.defaultTargets) > 0 {
+				for i := range endpoints {
+					eps := endpointsForHostname(endpoints[i].DNSName, ms.defaultTargets, endpoints[i].RecordTTL, endpoints[i].ProviderSpecific, endpoints[i].SetIdentifier, "")
+					for _, ep := range eps {
+						ep.Labels = endpoints[i].Labels
+					}
+					result = append(result, eps...)
+				}
+			} else {
+				result = append(result, endpoints...)
+			}
+		}()
 
-	return result, nil
+	}
+	wg.Wait()
+	return result, err
 }
 
 func (ms *multiSource) AddEventHandler(ctx context.Context, handler func()) {
